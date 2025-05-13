@@ -1,0 +1,266 @@
+# CloudFormationのテンプレート形式のバージョンを指定
+AWSTemplateFormatVersion: '2010-09-09'
+
+# SAM（Serverless Application Model）変換を有効化
+# これによりSAM特有の簡略化された構文が使えるようになる
+Transform: AWS::Serverless-2016-10-31
+
+# テンプレートの説明
+Description: Python ToDo API
+
+# グローバル設定 - すべてのLambda関数に適用される共通設定
+Globals:
+  # すべてのLambda関数に適用される設定
+  Function:
+    # 関数のタイムアウト時間（秒単位）- 10秒でタイムアウトする
+    Timeout: 10
+    # 使用するランタイム - Python 3.9を使用
+    Runtime: python3.9
+    # CPU/メモリアーキテクチャ - x86_64を使用
+    Architectures:
+      - x86_64
+    # すべての関数に共通の環境変数
+    Environment:
+      Variables:
+        # DynamoDBテーブル名を環境変数として設定
+        # !Refを使用して別のリソース（TodosTable）を参照
+        TABLE_NAME: !Ref TodosTable
+
+# テンプレート内で定義されるAWSリソース
+Resources:
+  # 共通レイヤー - 複数のLambda関数で共有されるコード
+  CommonLayer:
+    # AWS::Serverless::LayerVersionはSAMの拡張リソースタイプ
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      # レイヤーの名前
+      LayerName: todo-common-layer
+      # レイヤーの説明
+      Description: Common dependencies for Todo functions
+      # レイヤーのコードの場所（ローカルパス）
+      ContentUri: layer/
+      # このレイヤーと互換性のあるランタイム
+      CompatibleRuntimes:
+        - python3.9
+    # レイヤーのビルド方法に関するメタデータ
+    Metadata:
+      BuildMethod: python3.9
+
+  # API Gateway - すべてのHTTPリクエストのエントリポイント
+  TodoApi:
+    # AWS::Serverless::ApiはSAMの拡張リソースタイプ
+    Type: AWS::Serverless::Api
+    Properties:
+      # APIのデプロイステージ名
+      StageName: Prod
+      # CORS（クロスオリジンリソース共有）の設定
+      Cors:
+        # 許可するオリジン - *は全てのドメインからのアクセスを許可
+        AllowOrigin: "'*'"
+        # 許可するHTTPヘッダー
+        AllowHeaders: "'Content-Type,Authorization'"
+        # 許可するHTTPメソッド
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+
+  # ディスパッチ(管理)用Lambda関数 - APIのルートパスを処理
+  DispatchFunction:
+    # AWS::Serverless::FunctionはSAMの拡張リソースタイプ
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所（ローカルパス）
+      CodeUri: dispatch/
+      # 関数のハンドラー（ファイル名.関数名）
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        # CommonLayerを参照
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # APIルートパスのイベント
+        ApiRoot:
+          # APIイベントタイプ
+          Type: Api
+          Properties:
+            # 使用するAPI Gateway
+            RestApiId: !Ref TodoApi
+            # APIのパス
+            Path: /
+            # 対象のHTTPメソッド（ANYは全メソッド対応）
+            Method: ANY
+
+  # ToDo一覧取得用Lambda関数
+  GetTodosFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所
+      CodeUri: get-todos/
+      # 関数のハンドラー
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # API /todos GETイベント
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TodoApi
+            # /todosパスを処理
+            Path: /todos
+            # GETメソッドのみを処理
+            Method: GET
+      # 関数に付与するIAMポリシー
+      Policies:
+        # DynamoDBの読み取り専用ポリシー
+        - DynamoDBReadPolicy:
+            # 対象のテーブル名
+            TableName: !Ref TodosTable
+
+  # ToDo作成用Lambda関数
+  CreateTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所
+      CodeUri: create-todo/
+      # 関数のハンドラー
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # API /todos POSTイベント
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TodoApi
+            # /todosパスを処理
+            Path: /todos
+            # POSTメソッドのみを処理
+            Method: POST
+      # 関数に付与するIAMポリシー
+      Policies:
+        # DynamoDBの書き込み専用ポリシー
+        - DynamoDBWritePolicy:
+            # 対象のテーブル名
+            TableName: !Ref TodosTable
+
+  # 個別ToDo取得用Lambda関数
+  GetTodoByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所
+      CodeUri: get-todo-by-id/
+      # 関数のハンドラー
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # API /todos/{id} GETイベント
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TodoApi
+            # /todos/{id}パスを処理 - {id}は動的パラメータ
+            Path: /todos/{id}
+            # GETメソッドのみを処理
+            Method: GET
+      # 関数に付与するIAMポリシー
+      Policies:
+        # DynamoDBの読み取り専用ポリシー
+        - DynamoDBReadPolicy:
+            # 対象のテーブル名
+            TableName: !Ref TodosTable
+
+  # ToDo更新用Lambda関数
+  UpdateTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所
+      CodeUri: update-todo/
+      # 関数のハンドラー
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # API /todos/{id} PUTイベント
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TodoApi
+            # /todos/{id}パスを処理
+            Path: /todos/{id}
+            # PUTメソッドのみを処理
+            Method: PUT
+      # 関数に付与するIAMポリシー
+      Policies:
+        # DynamoDBのCRUD（作成・読取・更新・削除）ポリシー
+        - DynamoDBCrudPolicy:
+            # 対象のテーブル名
+            TableName: !Ref TodosTable
+
+  # ToDo削除用Lambda関数
+  DeleteTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数のコードの場所
+      CodeUri: delete-todo/
+      # 関数のハンドラー
+      Handler: app.lambda_handler
+      # 関数が使用するレイヤー
+      Layers:
+        - !Ref CommonLayer
+      # 関数のトリガーとなるイベント
+      Events:
+        # API /todos/{id} DELETEイベント
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TodoApi
+            # /todos/{id}パスを処理
+            Path: /todos/{id}
+            # DELETEメソッドのみを処理
+            Method: DELETE
+      # 関数に付与するIAMポリシー
+      Policies:
+        # DynamoDBのCRUDポリシー
+        - DynamoDBCrudPolicy:
+            # 対象のテーブル名
+            TableName: !Ref TodosTable
+
+  # DynamoDBテーブル - ToDoデータの永続化に使用
+  TodosTable:
+    # AWS::DynamoDB::TableはCloudFormationの標準リソースタイプ
+    Type: AWS::DynamoDB::Table
+    Properties:
+      # テーブルの名前
+      TableName: PythonTodos
+      # 課金モード - PAY_PER_REQUESTはオンデマンド課金
+      BillingMode: PAY_PER_REQUEST
+      # テーブルの属性（カラム）定義
+      AttributeDefinitions:
+        # id属性を定義
+        - AttributeName: id
+          # S = 文字列型
+          AttributeType: S
+      # テーブルのキースキーマ
+      KeySchema:
+        # idをハッシュキー（プライマリキー）として使用
+        - AttributeName: id
+          KeyType: HASH
+
+# テンプレートの出力値
+Outputs:
+  # API URLを出力値として定義
+  ApiUrl:
+    # 出力値の説明
+    Description: URL of the API endpoint
+    # APIのURL - !Subを使用して文字列を組み立て
+    # はAPI IDに、は現在のリージョンに置き換えられる
+    Value: !Sub "https://.execute-api..amazonaws.com/Prod/"

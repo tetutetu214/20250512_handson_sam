@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Python ToDo API
+Globals:
+  Function:
+    Timeout: 10
+    Runtime: python3.9
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        TABLE_NAME:
+          Ref: TodosTable
+Resources:
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: todo-common-layer
+      Description: Common dependencies for Todo functions
+      ContentUri: CommonLayer
+      CompatibleRuntimes:
+      - python3.9
+    Metadata:
+      BuildMethod: python3.9
+      SamResourceId: CommonLayer
+  TodoApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Cors:
+        AllowOrigin: '''*'''
+        AllowHeaders: '''Content-Type,Authorization'''
+        AllowMethods: '''GET,POST,PUT,DELETE,OPTIONS'''
+  DispatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: DispatchFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiRoot:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /
+            Method: ANY
+    Metadata:
+      SamResourceId: DispatchFunction
+  GetTodosFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: GetTodosFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /todos
+            Method: GET
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: TodosTable
+    Metadata:
+      SamResourceId: GetTodosFunction
+  CreateTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: CreateTodoFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /todos
+            Method: POST
+      Policies:
+      - DynamoDBWritePolicy:
+          TableName:
+            Ref: TodosTable
+    Metadata:
+      SamResourceId: CreateTodoFunction
+  GetTodoByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: GetTodoByIdFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /todos/{id}
+            Method: GET
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: TodosTable
+    Metadata:
+      SamResourceId: GetTodoByIdFunction
+  UpdateTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: UpdateTodoFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /todos/{id}
+            Method: PUT
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: TodosTable
+    Metadata:
+      SamResourceId: UpdateTodoFunction
+  DeleteTodoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: DeleteTodoFunction
+      Handler: app.lambda_handler
+      Layers:
+      - Ref: CommonLayer
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: TodoApi
+            Path: /todos/{id}
+            Method: DELETE
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: TodosTable
+    Metadata:
+      SamResourceId: DeleteTodoFunction
+  TodosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PythonTodos
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: id
+        KeyType: HASH
+Outputs:
+  ApiUrl:
+    Description: URL of the API endpoint
+    Value:
+      Fn::Sub: https://.execute-api..amazonaws.com/Prod/
